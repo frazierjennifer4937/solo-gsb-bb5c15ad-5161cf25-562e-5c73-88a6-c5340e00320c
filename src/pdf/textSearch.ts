@@ -195,22 +195,21 @@ const clamp = (v: number, min: number, max: number): number =>
   Math.min(Math.max(v, min), max);
 
 /**
- * 计算某 item 内码点子区间 [cpStart, cpEnd) 在“未旋转 PDF 页面坐标”下的轴对齐包围盒。
+ * 计算某 item 在沿基线方向推进区间 [startAdvance, endAdvance)（点）内，
+ * “未旋转 PDF 页面坐标”下的轴对齐包围盒。
  * item.transform 为当前文本矩阵（点），(t[4],t[5]) 是基线起点，
  * (t[0],t[1]) 为基线方向基向量，(t[2],t[3]) 为高度方向基向量，
  * item.width 是整个字符串沿基线方向的推进长度（点）。
- * 按字符数线性比例分配宽度（与 pdf.js 文本层 canvasWidth 缩放同一模型），
  * 四角取轴对齐包围盒，因此对旋转文本同样成立。
  */
-function itemCharRangeRect(
+function itemRectFromAdvances(
   item: TextItem,
-  cpStart: number,
-  cpEnd: number,
+  startAdvance: number,
+  endAdvance: number,
   pageWidth: number,
   pageHeight: number,
 ): HitRect {
   const t = item.transform;
-  const len = [...item.str].length || 1;
   const bx = t[0];
   const by = t[1];
   const vx = t[2];
@@ -219,9 +218,6 @@ function itemCharRangeRect(
   const fontH = Math.hypot(vx, vy) || 1;
   const ux = bx / blen;
   const uy = by / blen;
-
-  const startAdvance = item.width * (cpStart / len);
-  const endAdvance = Math.max(item.width * (cpEnd / len), startAdvance);
 
   // 纵向覆盖整个字形盒：基线上方约一个字号、下方约 0.28 个字号，
   // 再加少量外扩，避免衬线 / 抗锯齿边缘露出
@@ -247,6 +243,32 @@ function itemCharRangeRect(
     x2: clamp(Math.max(...corners.map((c) => c[0])), 0, pageWidth),
     y2: clamp(Math.max(...corners.map((c) => c[1])), 0, pageHeight),
   };
+}
+
+/**
+ * 计算某 item 内码点子区间 [cpStart, cpEnd) 的轴对齐包围盒。
+ * 按字符数线性比例分配宽度（与 pdf.js 文本层 canvasWidth 缩放同一模型）。
+ */
+function itemCharRangeRect(
+  item: TextItem,
+  cpStart: number,
+  cpEnd: number,
+  pageWidth: number,
+  pageHeight: number,
+): HitRect {
+  const len = [...item.str].length || 1;
+  const startAdvance = item.width * (cpStart / len);
+  const endAdvance = Math.max(item.width * (cpEnd / len), startAdvance);
+  return itemRectFromAdvances(item, startAdvance, endAdvance, pageWidth, pageHeight);
+}
+
+/**
+ * 整个文本 item 的轴对齐包围盒（未旋转 PDF 页面坐标）。
+ * 边缘泄漏检查以“文本片段（一个 pdf.js 文本项）”为粒度，
+ * 几何模型与查找命中完全一致：查到的字框在哪，泄漏检查就在哪。
+ */
+export function itemRect(item: TextItem, pageWidth: number, pageHeight: number): HitRect {
+  return itemRectFromAdvances(item, 0, item.width, pageWidth, pageHeight);
 }
 
 /**

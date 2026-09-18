@@ -358,6 +358,32 @@ button.primary {
   border: 1.5px dashed #a771ff;
 }
 
+/* ---------- 边缘泄漏检查高亮（画布内） ---------- */
+/* 片段完整包围盒：青色描边，标出“这个文字块与遮盖相交” */
+.leak-fragment {
+  position: absolute;
+  background: rgba(0, 200, 220, 0.08);
+  border: 1.5px solid rgba(0, 190, 210, 0.95);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* 外露部分：红色实心 + 红色描边，最醒目 */
+.leak-exposed {
+  position: absolute;
+  background: rgba(255, 60, 60, 0.55);
+  border: 1.5px solid #ff2f2f;
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+/* 与所选风险关联的遮盖：青色外描边 */
+.redaction-box.leak-linked {
+  outline: 2px solid #19d3da;
+  outline-offset: 1px;
+}
+
 /* ---------- 跨页重复区域面板 ---------- */
 .repeat-panel {
   gap: 12px;
@@ -758,6 +784,33 @@ button.primary {
 .dim {
   color: var(--text-dim);
   font-size: 12px;
+}
+
+/* ---------- 边缘泄漏检查面板 ---------- */
+.leak-risk .leak-where {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.leak-risk.selected .find-snippet {
+  background: rgba(25, 211, 218, 0.18);
+  color: #8ef2f6;
+}
+
+.leak-unchecked {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.leak-unchecked-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
 }
 
 /* ---------- 导入方案确认弹窗 ---------- */

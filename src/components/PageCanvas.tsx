@@ -43,6 +43,19 @@ export interface RepeatMarker {
   kind: 'apply' | 'skip' | 'source';
 }
 
+/**
+ * 边缘泄漏检查的画布高亮（PDF 页面坐标）：
+ * - exposed：片段露在遮盖外的部分（红色实心，最醒目）；
+ * - rect：片段完整包围盒（青色描边）；
+ * - linkedBoxIds：需要一并高亮的关联遮盖 id（画布上加描边）。
+ */
+export interface LeakHighlight {
+  id: string;
+  rect: RectCoords;
+  exposed: RectCoords[];
+  linkedBoxIds: string[];
+}
+
 interface Props {
   page: PDFPageProxy;
   zoom: number;
@@ -61,6 +74,8 @@ interface Props {
   onPickRegion(rect: RectCoords): void;
   /** 跨页重复预览标记（PDF 页面坐标），画布上虚线显示，不参与交互 */
   repeatMarkers: RepeatMarker[];
+  /** 边缘泄漏检查的高亮（外露部分 + 片段外框 + 关联遮盖），仅显示 */
+  leakHighlights: LeakHighlight[];
   onSelect(id: string | null): void;
   onAdd(box: RedactionBox): void;
   onChange(box: RedactionBox): void;
@@ -98,6 +113,7 @@ export function PageCanvas({
   pickingRegion,
   onPickRegion,
   repeatMarkers,
+  leakHighlights,
   onSelect,
   onAdd,
   onChange,
@@ -117,6 +133,13 @@ export function PageCanvas({
     () => page.getViewport({ scale: zoom, rotation: (page.rotate + rotation) % 360 }),
     [page, zoom, rotation],
   );
+
+  /** 当前页边缘泄漏高亮涉及的关联遮盖 id（画布上加醒目描边） */
+  const leakLinkedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const h of leakHighlights) for (const id of h.linkedBoxIds) ids.add(id);
+    return ids;
+  }, [leakHighlights]);
 
   // 渲染 PDF 页面到底层 canvas（高分屏按 devicePixelRatio 超采样）
   useEffect(() => {
@@ -293,13 +316,14 @@ export function PageCanvas({
         {boxes.map((b) => {
           const r = draft && draft.id === b.id ? draft.rect : boxToRect(b);
           const selected = b.id === selectedId;
+          const leakLinked = leakLinkedIds.has(b.id);
           return (
             <div
               key={b.id}
-              className={`redaction-box${selected ? ' selected' : ''}`}
+              className={`redaction-box${selected ? ' selected' : ''}${leakLinked ? ' leak-linked' : ''}`}
               style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
               onPointerDown={(e) => startMove(e, b)}
-              title="遮盖区域"
+              title={leakLinked ? '与边缘泄漏风险关联的遮盖' : '遮盖区域'}
             >
               {selected &&
                 tool === 'select' &&
@@ -324,6 +348,28 @@ export function PageCanvas({
             }}
           />
         )}
+        {leakHighlights.flatMap((h) => {
+          const fr = coordsToRect(h.rect);
+          const nodes = [
+            <div
+              key={`leak-${h.id}-frag`}
+              className="leak-fragment"
+              style={{ left: fr.left, top: fr.top, width: fr.width, height: fr.height }}
+            />,
+          ];
+          // 外露部分最后渲染，压在片段外框与遮盖之上
+          h.exposed.forEach((e, i) => {
+            const er = coordsToRect(e);
+            nodes.push(
+              <div
+                key={`leak-${h.id}-exp-${i}`}
+                className="leak-exposed"
+                style={{ left: er.left, top: er.top, width: er.width, height: er.height }}
+              />,
+            );
+          });
+          return nodes;
+        })}
         {repeatMarkers.map((m) => {
           const vr = coordsToRect(m.rect);
           return (
