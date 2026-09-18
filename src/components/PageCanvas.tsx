@@ -43,6 +43,17 @@ export interface RepeatMarker {
   kind: 'apply' | 'skip' | 'source';
 }
 
+/**
+ * 边缘泄漏检查的画布高亮（仅当前选中的风险项，PDF 页面坐标）：
+ * 片段整体框、外露分区以及需要强调的关联遮盖 id。
+ */
+export interface LeakActive {
+  riskId: string;
+  fragment: RectCoords;
+  exposed: RectCoords[];
+  boxIds: string[];
+}
+
 interface Props {
   page: PDFPageProxy;
   zoom: number;
@@ -61,6 +72,8 @@ interface Props {
   onPickRegion(rect: RectCoords): void;
   /** 跨页重复预览标记（PDF 页面坐标），画布上虚线显示，不参与交互 */
   repeatMarkers: RepeatMarker[];
+  /** 边缘泄漏检查：当前跳转到的风险项高亮（片段框 + 外露部分 + 关联遮盖） */
+  leakActive: LeakActive | null;
   onSelect(id: string | null): void;
   onAdd(box: RedactionBox): void;
   onChange(box: RedactionBox): void;
@@ -98,6 +111,7 @@ export function PageCanvas({
   pickingRegion,
   onPickRegion,
   repeatMarkers,
+  leakActive,
   onSelect,
   onAdd,
   onChange,
@@ -293,10 +307,11 @@ export function PageCanvas({
         {boxes.map((b) => {
           const r = draft && draft.id === b.id ? draft.rect : boxToRect(b);
           const selected = b.id === selectedId;
+          const leakRelated = !!leakActive?.boxIds.includes(b.id);
           return (
             <div
               key={b.id}
-              className={`redaction-box${selected ? ' selected' : ''}`}
+              className={`redaction-box${selected ? ' selected' : ''}${leakRelated ? ' leak-related' : ''}`}
               style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
               onPointerDown={(e) => startMove(e, b)}
               title="遮盖区域"
@@ -334,6 +349,31 @@ export function PageCanvas({
             />
           );
         })}
+        {leakActive && (
+          <>
+            {/* 外露部分：红色实心高亮，直接标示遮盖外缘露出的文字区域 */}
+            {leakActive.exposed.map((r, i) => {
+              const vr = coordsToRect(r);
+              return (
+                <div
+                  key={`leak-exposed-${i}`}
+                  className="leak-exposed"
+                  style={{ left: vr.left, top: vr.top, width: vr.width, height: vr.height }}
+                />
+              );
+            })}
+            {/* 片段整体包围盒：青色实线框 */}
+            {(() => {
+              const vr = coordsToRect(leakActive.fragment);
+              return (
+                <div
+                  className="leak-fragment"
+                  style={{ left: vr.left, top: vr.top, width: vr.width, height: vr.height }}
+                />
+              );
+            })()}
+          </>
+        )}
       </div>
     </div>
   );

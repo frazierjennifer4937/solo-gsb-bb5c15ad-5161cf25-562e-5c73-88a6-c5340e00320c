@@ -250,6 +250,19 @@ function itemCharRangeRect(
 }
 
 /**
+ * 整个文本 item 的字形包围盒（PDF 页面坐标，与命中框同一几何模型与外扩量）。
+ * 边缘泄漏检查以一个非空白 text item 为一个“文本片段”，使用本函数取其页面坐标。
+ */
+export function itemFullRect(
+  item: TextItem,
+  pageWidth: number,
+  pageHeight: number,
+): HitRect {
+  const len = [...item.str].length || 1;
+  return itemCharRangeRect(item, 0, len, pageWidth, pageHeight);
+}
+
+/**
  * 把归一化文本上的一个区间 [start,end) 转换成按 item 切分的候选框。
  * item 边界补入的分隔空格（item === -1）及 item 内空白不产生框，
  * 因此同一行中间未命中的间隔文字（含被 pdf.js 拉宽的空白 item）不会被遮住。

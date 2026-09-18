@@ -358,6 +358,32 @@ button.primary {
   border: 1.5px dashed #a771ff;
 }
 
+/* ---------- 边缘泄漏检查高亮 ---------- */
+/* 风险片段整体包围盒：青色实线框 */
+.leak-fragment {
+  position: absolute;
+  border: 1.5px solid #00c9c0;
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 201, 192, 0.35);
+}
+
+/* 外露部分：红色实心高亮（压在黑遮盖外缘露出的文字上） */
+.leak-exposed {
+  position: absolute;
+  background: rgba(255, 60, 60, 0.38);
+  border: 1.5px solid #ff3c3c;
+  border-radius: 1px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+/* 与当前风险关联的遮盖：亮青色加粗描边强调 */
+.redaction-box.leak-related {
+  border: 2px solid #00e5db;
+  box-shadow: 0 0 0 2px rgba(0, 229, 219, 0.35);
+}
+
 /* ---------- 跨页重复区域面板 ---------- */
 .repeat-panel {
   gap: 12px;
@@ -758,6 +784,101 @@ button.primary {
 .dim {
   color: var(--text-dim);
   font-size: 12px;
+}
+
+/* ---------- 边缘泄漏检查面板 ---------- */
+.leak-panel {
+  gap: 10px;
+}
+
+.leak-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.leak-count strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  margin: 0 2px;
+}
+
+.leak-count.risk {
+  color: #ff9a9b;
+}
+
+.leak-count.risk strong {
+  color: var(--danger);
+}
+
+.leak-count.ok {
+  color: #b7f0c8;
+}
+
+.leak-count.ok strong {
+  color: #5fd98a;
+}
+
+.leak-unchecked {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #4a3418;
+  border: 1px solid #7a5a26;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.leak-unchecked-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffd9a0;
+}
+
+.leak-unchecked .repeat-chip {
+  border-color: #c9913f;
+  color: #ffd9a0;
+}
+
+.leak-unchecked .repeat-chip:hover {
+  background: rgba(201, 145, 63, 0.18);
+}
+
+.leak-unchecked .repeat-chip.current {
+  background: #c9913f;
+  border-color: #c9913f;
+  color: #1f1608;
+}
+
+.leak-risk-count {
+  color: #ff9a9b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.leak-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.leak-text {
+  word-break: break-all;
+}
+
+.leak-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.find-hit-list li.leak-active .leak-snippet {
+  background: rgba(0, 201, 192, 0.14);
+  color: #5ff0e8;
 }
 
 /* ---------- 导入方案确认弹窗 ---------- */

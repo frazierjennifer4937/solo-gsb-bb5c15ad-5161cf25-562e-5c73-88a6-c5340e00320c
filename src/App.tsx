@@ -17,6 +17,13 @@ import {
   parsePageRanges,
   type RepeatPlan,
 } from './pdf/repeatRegion';
+import {
+  extendBoxesForRisks,
+  rebuildReport,
+  scanEdgeLeaks,
+  type LeakReport,
+  type LeakRisk,
+} from './pdf/edgeLeak';
 import type { RectCoords } from './pdf/scheme';
 import {
   buildScheme,
@@ -32,9 +39,10 @@ import {
 import { sha256Hex } from './pdf/sha256';
 import { Toolbar } from './components/Toolbar';
 import { PageList } from './components/PageList';
-import { PageCanvas, type RepeatMarker } from './components/PageCanvas';
+import { PageCanvas, type RepeatMarker, type LeakActive } from './components/PageCanvas';
 import { FindPanel, type FindStatus } from './components/FindPanel';
 import { RepeatPanel } from './components/RepeatPanel';
+import { LeakPanel, type LeakStatus } from './components/LeakPanel';
 import { ImportDialog } from './components/ImportDialog';
 
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
@@ -84,6 +92,15 @@ export default function App() {
   const [repeatPlan, setRepeatPlan] = useState<RepeatPlan | null>(null);
   const [repeatError, setRepeatError] = useState<string | null>(null);
 
+  // ---- 边缘泄漏检查 ----
+  const [leakOpen, setLeakOpen] = useState(false);
+  const [leakStatus, setLeakStatus] = useState<LeakStatus>({ kind: 'idle' });
+  const [leakReport, setLeakReport] = useState<LeakReport | null>(null);
+  const [leakScannedPages, setLeakScannedPages] = useState(0);
+  const [leakChecked, setLeakChecked] = useState<Set<string>>(new Set());
+  const [activeLeakRiskId, setActiveLeakRiskId] = useState<string | null>(null);
+  const leakToken = useRef(0);
+
   const {
     value: redactions,
     set: setRedactions,
@@ -123,6 +140,7 @@ export default function App() {
       setPendingScheme(null);
       scanToken.current += 1; // 中止进行中的查找扫描
       cancelToken.current += 1;
+      leakToken.current += 1; // 中止进行中的边缘泄漏扫描
       try {
         const data = await file.arrayBuffer();
         // 加载前在浏览器本地计算源文件 SHA-256（subtle 不可用时自动回退纯 JS 实现）
@@ -156,6 +174,12 @@ export default function App() {
         setRepeatRange('');
         setRepeatPlan(null);
         setRepeatError(null);
+        setLeakOpen(false);
+        setLeakStatus({ kind: 'idle' });
+        setLeakReport(null);
+        setLeakScannedPages(0);
+        setLeakChecked(new Set());
+        setActiveLeakRiskId(null);
       } catch {
         setError('无法解析该文件，请确认是有效的 PDF。');
       }
@@ -446,6 +470,7 @@ export default function App() {
       const next = !open;
       if (next) {
         setFindOpen(false);
+        setLeakOpen(false);
         setTool('draw');
       } else {
         setRepeatSource(null);
@@ -552,6 +577,184 @@ export default function App() {
     }
     return markers;
   }, [repeatOpen, repeatSource, repeatPlan, pageNum]);
+
+  // ================= 边缘泄漏检查 =================
+
+  const leakReportRef = useRef<LeakReport | null>(null);
+  leakReportRef.current = leakReport;
+
+  /** 打开 / 关闭面板：与查找、重复区域面板互斥 */
+  const toggleLeak = useCallback(() => {
+    setLeakOpen((open) => {
+      const next = !open;
+      if (next) {
+        setFindOpen(false);
+        setRepeatOpen(false);
+      } else {
+        leakToken.current += 1; // 关闭面板即取消进行中的扫描（已扫描结果保留）
+      }
+      return next;
+    });
+  }, []);
+
+  const closeLeak = useCallback(() => {
+    leakToken.current += 1;
+    setLeakOpen(false);
+  }, []);
+
+  const cancelLeakScan = useCallback(() => {
+    leakToken.current += 1;
+  }, []);
+
+  /**
+   * 逐页提取文字并检查遮盖边缘是否压住未被完整包住的片段。
+   * 未扫描（含取消）时只展示已扫描页，未检查页明确单列，绝不计为安全通过。
+   */
+  const runLeakScan = useCallback(async () => {
+    if (!doc) return;
+    const token = leakToken.current + 1;
+    leakToken.current = token;
+    setActiveLeakRiskId(null);
+    setLeakChecked(new Set());
+    setLeakReport(null);
+    setLeakScannedPages(0);
+    setLeakStatus({ kind: 'scanning', done: 0, total: doc.numPages });
+    try {
+      const { scannedPages, cancelled } = await scanEdgeLeaks(
+        doc,
+        redactionsRef.current,
+        pageTextCache.current,
+        {
+          onProgress: (done, total) => {
+            if (leakToken.current === token) setLeakStatus({ kind: 'scanning', done, total });
+          },
+          shouldCancel: () => leakToken.current !== token,
+        },
+      );
+      if (leakToken.current !== token) return; // 已被新扫描 / 关闭文档取代
+      // 扫描过程中遮盖可能已被编辑：用最新遮盖与已缓存文本重算一次已扫描页
+      const scanned = Array.from({ length: scannedPages }, (_, i) => i + 1);
+      const fresh = rebuildReport(
+        scanned,
+        redactionsRef.current,
+        pageTextCache.current,
+        pageSizes,
+      );
+      const riskIds = fresh.pages.flatMap((p) => p.risks.map((r) => r.id));
+      setLeakReport(fresh);
+      setLeakScannedPages(scannedPages);
+      setLeakChecked(new Set(riskIds)); // 默认勾选全部风险
+      setLeakStatus({ kind: 'done', complete: !cancelled });
+    } catch {
+      if (leakToken.current === token) {
+        setLeakStatus({ kind: 'error', message: '文字提取失败，请重试。' });
+      }
+    }
+  }, [doc, pageSizes]);
+
+  /**
+   * 遮盖集合被手工编辑 / 撤销 / 重做后，用已缓存的页面文本重新计算已扫描页的结果，
+   * 保证风险列表与当前遮盖一致；新消失的风险从勾选 / 高亮集合中剔除。
+   */
+  useEffect(() => {
+    const report = leakReportRef.current;
+    if (!report || !doc || pageSizes.length !== doc.numPages) return;
+    const next = rebuildReport(
+      report.pages.map((p) => p.page),
+      redactions,
+      pageTextCache.current,
+      pageSizes,
+    );
+    setLeakReport(next);
+    const live = new Set(next.pages.flatMap((p) => p.risks.map((r) => r.id)));
+    setLeakChecked((prev) => {
+      const kept = [...prev].filter((id) => live.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+    setActiveLeakRiskId((cur) => (cur && !live.has(cur) ? null : cur));
+    // 仅以遮盖集合变化为触发条件；pageSizes 在文档加载后不变
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [redactions]);
+
+  const toggleLeakRisk = useCallback((id: string) => {
+    setLeakChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleLeakPage = useCallback((page: number, on: boolean) => {
+    const ids = (leakReportRef.current?.pages.find((p) => p.page === page)?.risks ?? []).map(
+      (r) => r.id,
+    );
+    setLeakChecked((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleAllLeakRisks = useCallback((on: boolean) => {
+    const all = leakReportRef.current?.pages.flatMap((p) => p.risks.map((r) => r.id)) ?? [];
+    setLeakChecked(on ? new Set(all) : new Set());
+  }, []);
+
+  /** 点击风险项：跳转到对应页并高亮片段整体、外露部分与关联遮盖 */
+  const jumpToLeakRisk = useCallback((risk: LeakRisk) => {
+    setPageNum(risk.page);
+    setActiveLeakRiskId(risk.id);
+  }, []);
+
+  /** 当前页风险高亮：片段框 + 外露矩形 + 需要强调的关联遮盖 id */
+  const leakActive = useMemo<LeakActive | null>(() => {
+    if (!activeLeakRiskId || !leakReport) return null;
+    const risk = leakReport.pages
+      .find((p) => p.page === pageNum)
+      ?.risks.find((r) => r.id === activeLeakRiskId);
+    if (!risk) return null;
+    return {
+      riskId: risk.id,
+      fragment: risk.rect,
+      exposed: risk.exposed,
+      boxIds: risk.overlaps.map((o) => o.boxId),
+    };
+  }, [activeLeakRiskId, leakReport, pageNum]);
+
+  /**
+   * 批量扩展勾选风险关联的遮盖：同一遮盖关联多项时一次取并集，
+   * 找不到关联遮盖（遮盖已被删除）的风险跳过；整批一次 set 提交，仅一条撤销记录。
+   */
+  const applyLeakFixes = useCallback(() => {
+    const report = leakReportRef.current;
+    if (!report) return;
+    const chosen = report.pages.flatMap((p) =>
+      p.risks.filter((r) => leakChecked.has(r.id)),
+    );
+    if (chosen.length === 0) return;
+    const { map, changedBoxIds, fixedRiskCount, skippedRiskCount } = extendBoxesForRisks(
+      redactionsRef.current,
+      chosen,
+    );
+    if (changedBoxIds.length === 0) {
+      setNotice('勾选的风险无需扩展（关联遮盖可能已被调整）。');
+      return;
+    }
+    setRedactions(map); // 整批仅一条撤销记录
+    const onCurrentPage = chosen.some(
+      (r) => r.page === pageNum && r.overlaps.some((o) => o.boxId === changedBoxIds[0]),
+    );
+    setSelectedId(onCurrentPage ? changedBoxIds[0] : null);
+    setNotice(
+      `已扩展 ${changedBoxIds.length} 个遮盖以完整包住 ${fixedRiskCount} 项风险片段` +
+        `${skippedRiskCount > 0 ? `，${skippedRiskCount} 项因关联遮盖已删除而跳过` : ''}` +
+        '（整批为一条撤销记录）。',
+    );
+  }, [leakChecked, setRedactions, pageNum]);
 
   const zoomIn = () => setZoom((z) => ZOOM_LEVELS.find((l) => l > z + 0.001) ?? ZOOM_LEVELS[ZOOM_LEVELS.length - 1]);
   const zoomOut = () => setZoom((z) => [...ZOOM_LEVELS].reverse().find((l) => l < z - 0.001) ?? ZOOM_LEVELS[0]);
@@ -706,17 +909,22 @@ export default function App() {
         exporting={exporting}
         findOpen={findOpen}
         repeatOpen={repeatOpen}
+        leakOpen={leakOpen}
         canUseScheme={!!doc && pageSizes.length === numPages && sourceHash.length === 64}
         onOpen={() => fileInputRef.current?.click()}
         onToolChange={setTool}
         onToggleFind={() => {
           setFindOpen((v) => {
             const next = !v;
-            if (next) setRepeatOpen(false);
+            if (next) {
+              setRepeatOpen(false);
+              setLeakOpen(false);
+            }
             return next;
           });
         }}
         onToggleRepeat={toggleRepeat}
+        onToggleLeak={toggleLeak}
         onZoomIn={zoomIn}
         onZoomOut={zoomOut}
         onRotate={() => setRotation((r) => (r + 90) % 360)}
@@ -754,6 +962,7 @@ export default function App() {
                 pickingRegion={repeatOpen}
                 onPickRegion={pickRepeatRegion}
                 repeatMarkers={repeatMarkers}
+                leakActive={leakActive}
                 onSelect={setSelectedId}
                 onAdd={addBox}
                 onChange={changeBox}
@@ -802,6 +1011,26 @@ export default function App() {
               plan={repeatPlan}
             />
           )}
+          {leakOpen && (
+            <LeakPanel
+              status={leakStatus}
+              report={leakReport}
+              scannedPages={leakScannedPages}
+              numPages={numPages}
+              checked={leakChecked}
+              activeRiskId={activeLeakRiskId}
+              currentPage={pageNum}
+              onScan={() => void runLeakScan()}
+              onCancel={cancelLeakScan}
+              onClose={closeLeak}
+              onToggle={toggleLeakRisk}
+              onTogglePage={toggleLeakPage}
+              onToggleAll={toggleAllLeakRisks}
+              onJumpRisk={jumpToLeakRisk}
+              onJump={setPageNum}
+              onApply={applyLeakFixes}
+            />
+          )}
         </div>
       ) : (
         <div className="empty">
@@ -823,6 +1052,11 @@ export default function App() {
             <span>本页遮盖 {boxesForPage.length} 处</span>
             <span>全文共 {totalBoxes} 处</span>
             {findOpen && totalCandidates > 0 && <span>查找候选 {totalCandidates} 处</span>}
+            {leakOpen && leakReport && (
+              <span>
+                泄漏风险 {leakReport.totalRisks} 项 · 未检查 {leakReport.uncheckedPages.length} 页
+              </span>
+            )}
             <span>导出分辨率 144 DPI · 纯本地处理</span>
           </>
         )}
